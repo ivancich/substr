@@ -21,9 +21,18 @@ const (
 	byteCount   = 1 + math.MaxUint8
 	buffSize    = 4 * 1024 // 4KB
 	outChanSize = 64
-	ErrorOffset = math.MaxUint32
+	errorOffset = math.MaxUint32
 )
 
+// The error returned if an empty needle is provided to one of the search functions.
+var ErrEmptyNeedle = errors.New("boyer_moore: the needle may not be empty")
+
+
+// A processed version of the needle in which various tables have been
+// created that make the searching efficient (via Boyer-Moore algorithm).
+// If one is searching multiple blocks of data, it's better to calculate
+// the Needle once and use functions that take a pointer to it as a
+// parameter to avoid repeating the pre-processing.
 type Needle struct {
 	bytes       []byte
 	length      uint32
@@ -31,6 +40,7 @@ type Needle struct {
 	offsetTable []uint32
 }
 
+// Return a pre-processed Needle given an array of bytes.
 func NewNeedleBytes(needle []byte) *Needle {
 	return &Needle{
 		bytes:       needle,
@@ -39,53 +49,75 @@ func NewNeedleBytes(needle []byte) *Needle {
 		offsetTable: makeOffsetTable(needle)}
 }
 
+// Return a pre-processed Needle given a string.
 func NewNeedleStr(needle string) *Needle {
 	return NewNeedleBytes([]byte(needle))
 }
 
+// A result from a search. It either contains an error, if Error is not nil.
+// If Error is nil, then Offset contains the offset of a match within the
+// data searched.
 type Result struct {
 	Offset uint32
 	Error  error
 }
 
-func (r *Result) String() string {
+// Returns a string version of a Result, which can be used in testing.
+func (r *Result) string() string {
 	return fmt.Sprintf("Result{%v, %v}", r.Offset, r.Error)
 }
 
-var (
-	ErrEmptyNeedle = errors.New("boyer_moore: the needle may not be empty")
-)
-
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexWithinReaderStr(haystack io.Reader, needle string) (any bool, firstOffset uint32, e error) {
 	return IndexWithinReaderNeedle(haystack, NewNeedleStr(needle))
 }
 
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexesWithinReaderStr(haystack io.Reader, needle string) <-chan Result {
 	return IndexesWithinReaderNeedle(haystack, NewNeedleStr(needle))
 }
 
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexWithinReaderBytes(haystack io.Reader, needle []byte) (any bool, firstOffset uint32, e error) {
 	return IndexWithinReaderNeedle(haystack, NewNeedleBytes(needle))
 }
 
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexesWithinReaderBytes(haystack io.Reader, needle []byte) <-chan Result {
 	return IndexesWithinReaderNeedle(haystack, NewNeedleBytes(needle))
 }
 
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexWithinReaderNeedle(haystack io.Reader, needle *Needle) (any bool, firstOffset uint32, e error) {
 	return returnOne(indexesWithinReaderHelp(haystack, needle, true))
 }
 
+// Searches for needle within haystack. Returns any=true if any match is
+// found; firstOffset is location of first match; and e is any error that
+// occurred.
 func IndexesWithinReaderNeedle(haystack io.Reader, needle *Needle) <-chan Result {
 	return indexesWithinReaderHelp(haystack, needle, false)
 }
 
+// Searches for needle within haystack. stopAtFirst determines whether
+// it keeps searching once a match is found. The results are sent on
+// the channel returned.
 func indexesWithinReaderHelp(haystack io.Reader, needle *Needle, stopAtFirst bool) <-chan Result {
 	out := make(chan Result, outChanSize)
 
 	go func() {
 		if needle.length == 0 {
-			out <- Result{ErrorOffset, ErrEmptyNeedle}
+			out <- Result{errorOffset, ErrEmptyNeedle}
 			close(out)
 		}
 
@@ -103,7 +135,7 @@ func indexesWithinReaderHelp(haystack io.Reader, needle *Needle, stopAtFirst boo
 					continue
 				}
 			} else if err != io.EOF {
-				out <- Result{ErrorOffset, err}
+				out <- Result{errorOffset, err}
 				break outer
 			} else {
 				done = true
@@ -112,7 +144,7 @@ func indexesWithinReaderHelp(haystack io.Reader, needle *Needle, stopAtFirst boo
 			haystackSkip := uint32(0)
 			for {
 				index := indexOfHelper(buffer[0:used], needle, used, haystackSkip)
-				if index == ErrorOffset {
+				if index == errorOffset {
 					break
 				}
 				out <- Result{offset + index, nil}
@@ -162,14 +194,13 @@ func IndexOf(haystack, needleBytes []byte) (any bool, firstOffset uint32, e erro
 	go func() {
 		needle := NewNeedleBytes(needleBytes)
 		if needle.length == 0 {
-			out <- Result{
-				ErrorOffset, ErrEmptyNeedle}
+			out <- Result{errorOffset, ErrEmptyNeedle}
 		}
 
 		haystackLen := uint32(len(haystack))
 
 		index := indexOfHelper(haystack, needle, haystackLen, 0)
-		if index != ErrorOffset {
+		if index != errorOffset {
 			out <- Result{index, nil}
 		}
 		close(out)
@@ -187,7 +218,7 @@ func IndexesOf(haystack, needleBytes []byte) <-chan Result {
 	go func() {
 		needle := NewNeedleBytes(needleBytes)
 		if needle.length == 0 {
-			out <- Result{math.MaxUint32, ErrEmptyNeedle}
+			out <- Result{errorOffset, ErrEmptyNeedle}
 		}
 
 		haystackLen := uint32(len(haystack))
@@ -195,7 +226,7 @@ func IndexesOf(haystack, needleBytes []byte) <-chan Result {
 
 		for {
 			index := indexOfHelper(haystack, needle, haystackLen, haystackStartingIndex)
-			if index == ErrorOffset {
+			if index == errorOffset {
 				break
 			}
 			out <- Result{index, nil}
@@ -208,8 +239,8 @@ func IndexesOf(haystack, needleBytes []byte) <-chan Result {
 	return out
 }
 
-// Returns the next found index of needle within haystack after skipping haystackSkip positions.
-// Returns -1 if no matches are found.
+// Returns the next found index of needle within haystack after skipping
+// haystackSkip positions. Returns errorOffset if no matches are found.
 func indexOfHelper(haystack []byte, needle *Needle, haystackLen, haystackSkip uint32) uint32 {
 	for i := needle.length - 1 + haystackSkip; i < haystackLen; {
 		var j uint32
@@ -222,7 +253,7 @@ func indexOfHelper(haystack []byte, needle *Needle, haystackLen, haystackSkip ui
 		i += maxUint32(needle.offsetTable[needle.length-1-j], needle.charTable[haystack[i]])
 	}
 
-	return math.MaxUint32
+	return errorOffset
 }
 
 // Makes the jump table based on the mismatched character information.
@@ -278,6 +309,9 @@ func suffixLength(needle []byte, p int) int {
 	return length
 }
 
+
+// Given a channel of Result/s returns the first Result and insures that no
+// more are returned (if there is another result, it panics).
 func returnOne(c <-chan Result) (any bool, firstOffset uint32, e error) {
 	if result, ok := <-c; ok {
 		if result.Error == nil {
@@ -295,6 +329,7 @@ func returnOne(c <-chan Result) (any bool, firstOffset uint32, e error) {
 	return false, 0, nil
 }
 
+// Returns the larger of its two (unsigned) parameters.
 func maxUint32(i, j uint32) uint32 {
 	if i > j {
 		return i
