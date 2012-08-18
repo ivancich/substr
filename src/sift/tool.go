@@ -10,11 +10,11 @@ See: http://creativecommons.org/licenses/by-sa/3.0/
 package main
 
 import (
-	"bytes"
-	"errors"
+	ba "bytearray"
 	"flag"
 	"fmt"
 	"io"
+	"myerr"
 	"os"
 	"substr"
 )
@@ -25,8 +25,6 @@ const (
 	status_fatal_error = 2
 )
 
-type byteArrayArg []byte
-
 var needleString *string = flag.String("t", "", "text to look for within input(s)")
 var findAll *bool = flag.Bool("a", false, "display all matching offsets")
 var recursive *bool = flag.Bool("r", false, "recursively descend directories")
@@ -34,65 +32,24 @@ var displayCount *bool = flag.Bool("c", false, "display count of matches")
 var quiet *bool = flag.Bool("q", false, "quiet; exit immediatly with status 0 if any matches found")
 var processStdin *bool = flag.Bool("stdin", false, "process stdin as one of the inputs")
 
-var needleBytes byteArrayArg
+var needleBytes ba.ByteArray
 var needle *substr.Needle
 
-func charToValue(b byte) (byte, error) {
-	if b >= '0' && b <= '9' {
-		return b - '0', nil
-	} else if b >= 'a' && b <= 'f' {
-		return b - 'a' + 10, nil
-	} else if b >= 'A' && b <= 'F' {
-		return b - 'A' + 10, nil
-	}
-	return 0, fmt.Errorf("%q is not a valid hex character", b)
-}
-
-func (n *byteArrayArg) Set(value string) error {
-	l := len(value)
-	if l%2 != 0 {
-		return errors.New("must specify an even number of (hex) characters to specify a byte sequence")
-	}
-	*n = make([]byte, 0, l/2)
-	for i := 0; i < l; i += 2 {
-		var err error
-		var v1, v2 byte
-		b1 := value[i]
-		b2 := value[i+1]
-		if v1, err = charToValue(b1); err != nil {
-			return err
-		}
-		if v2, err = charToValue(b2); err != nil {
-			return err
-		}
-
-		*n = append(*n, v1*16+v2)
-	}
-
-	return nil
-}
-
-func (n *byteArrayArg) String() string {
-	var buf bytes.Buffer
-	for _, b := range *n {
-		buf.WriteString(fmt.Sprintf("%02X", b))
-	}
-	return buf.String()
-}
-
-func processReader(accumulatedPath string, in io.Reader, in_size int64) {
+func processReader(path string, in io.Reader, in_size int64) {
 	if *displayCount {
-		count := findCount(accumulatedPath, substr.IndexesWithinReaderNeedle(in, needle))
-		fmt.Printf("%s: %d\n", accumulatedPath, count)
+		count := findCount(path, substr.IndexesWithinReaderNeedle(in, needle))
+		fmt.Printf("%s: %d\n", path, count)
+		}
+		}
 	} else if *findAll {
 		count := 0
 		for result := range substr.IndexesWithinReaderNeedle(in, needle) {
 			if count == 0 {
-				fmt.Printf("%s:\n", accumulatedPath)
+				fmt.Printf("%s:\n", path)
 			}
 			count++
 			if result.Error != nil {
-				myError("    error: %s", result.Error)
+				myerr.MyError("    error: %s", result.Error)
 			} else {
 				fmt.Printf("    match %3d at offset %*d\n", count, calcWidth(in_size), result.Offset)
 			}
@@ -100,12 +57,12 @@ func processReader(accumulatedPath string, in io.Reader, in_size int64) {
 	} else {
 		found, offset, err := substr.IndexWithinReaderNeedle(in, needle)
 		if err != nil {
-			myError("%s: error -- %s", accumulatedPath, err)
+			myerr.MyError("%s: error -- %s", path, err)
 		} else if found {
 			if *quiet {
 				os.Exit(status_found)
 			} else {
-				fmt.Printf("%s: first offset %d\n", accumulatedPath, offset)
+				fmt.Printf("%s: first offset %d\n", path, offset)
 			}
 		}
 	}
@@ -118,13 +75,13 @@ func processInputs(entry, accumulatedPath string) {
 	var info os.FileInfo
 
 	if info, err = os.Stat(entry); err != nil {
-		myError("error: %s", err)
+		myerr.MyError("error: %s", err)
 		return
 	}
 
 	if info.IsDir() {
 		if !*recursive {
-			myError("%s is a directory without recursive flag", accumulatedPath)
+			myerr.MyError("%s is a directory without recursive flag", accumulatedPath)
 			return
 		}
 
@@ -143,12 +100,12 @@ func processInputs(entry, accumulatedPath string) {
 
 		var f *os.File
 		if f, err = os.Open("."); err != nil {
-			myError("error: could not open directory %s; %s", accumulatedPath, err)
+			myerr.MyError("error: could not open directory %s; %s", accumulatedPath, err)
 			return
 		}
 		var entries_info []os.FileInfo
 		if entries_info, err = f.Readdir(-1); err != nil {
-			myError("error: could not read directory %s; %s", accumulatedPath, err)
+			myerr.MyError("error: could not read directory %s; %s", accumulatedPath, err)
 			return
 		}
 		if err = f.Close(); err != nil {
@@ -163,6 +120,8 @@ func processInputs(entry, accumulatedPath string) {
 		var f *os.File
 		var e error
 		if f, e = os.Open(entry); e != nil {
+			myerr.MyError("warning: could not open %s; skipping", accumulatedPath)
+			return
 		}
 
 		defer func() {
@@ -178,24 +137,12 @@ func findCount(path string, results <-chan substr.Result) int {
 	count := 0
 	for r := range results {
 		if r.Error != nil {
-			myError("%s: error -- %s", path, r.Error)
+			myerr.MyError("%s: error -- %s", path, r.Error)
 		} else {
 			count++
 		}
 	}
 	return count
-}
-
-// display an error using fmt.Printf style args to stderr
-func myError(formatString string, elements ...interface{}) {
-	fmt.Fprintf(os.Stderr, formatString, elements...)
-	fmt.Fprintln(os.Stderr)
-}
-
-// display an error using fmt.Printf style args to stderr; exit with specified status code
-func myFatal(code int, formatString string, elements ...interface{}) {
-	myError(formatString, elements...)
-	os.Exit(code)
 }
 
 // calculate how many digits are needed for numbers up to max
@@ -217,10 +164,10 @@ func main() {
 		if len(needleBytes) == 0 {
 			needle = substr.NewNeedleStr(*needleString)
 		} else {
-			myFatal(status_fatal_error, "error: specified both -t and -b parameters")
+			myerr.MyFatal(status_fatal_error, "error: specified both -t and -b parameters")
 		}
 	} else if len(needleBytes) == 0 {
-		myFatal(status_fatal_error, "error: specified neither -t nor -b parameter")
+		myerr.MyFatal(status_fatal_error, "error: specified neither -t nor -b parameter")
 	} else {
 		needle = substr.NewNeedleBytes(needleBytes)
 	}
@@ -232,7 +179,7 @@ func main() {
 	inputs := flag.Args()
 
 	if len(inputs) == 0 && !*processStdin {
-		myFatal(status_fatal_error, "error: did not specify any input files or directories or provide the standard input flag")
+		myerr.MyFatal(status_fatal_error, "error: did not specify any input files or directories or provide the standard input flag")
 	}
 
 	if *processStdin {
