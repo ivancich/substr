@@ -31,6 +31,7 @@ var recursive *bool = flag.Bool("r", false, "recursively descend directories")
 var displayCount *bool = flag.Bool("c", false, "display count of matches")
 var quiet *bool = flag.Bool("q", false, "quiet; exit immediatly with status 0 if any matches found")
 var processStdin *bool = flag.Bool("stdin", false, "process stdin as one of the inputs")
+var swapOutput *bool = flag.Bool("swap", false, "output in format for swap tool")
 
 var needleBytes ba.ByteArray
 var needle *substr.Needle
@@ -39,7 +40,35 @@ func processReader(path string, in io.Reader, in_size int64) {
 	if *displayCount {
 		count := findCount(path, substr.IndexesWithinReaderNeedle(in, needle))
 		fmt.Printf("%s: %d\n", path, count)
+	} else if *swapOutput {
+		found := false
+		gotError := false
+		for result := range substr.IndexesWithinReaderNeedle(in, needle) {
+			if gotError {
+				if result.Error != nil {
+					myerr.MyError("    error: %s", result.Error)
+				}
+				continue
+			} else if !found {
+				if result.Error != nil {
+					myerr.MyError("    error: %s", result.Error)
+					gotError = true
+				} else {
+					fmt.Printf("%s %d", path, result.Offset)
+					found = true
+				}
+			} else {
+				if result.Error != nil {
+					fmt.Println()
+					myerr.MyError("    error: %s", result.Error)
+					gotError = true
+				} else {
+					fmt.Printf(" %d", result.Offset)
+				}
+			}
 		}
+		if found && !gotError {
+			fmt.Println()
 		}
 	} else if *findAll {
 		count := 0
@@ -174,6 +203,10 @@ func main() {
 
 	if *quiet {
 		*findAll = false
+	}
+
+	if *swapOutput {
+		*findAll = true
 	}
 
 	inputs := flag.Args()
