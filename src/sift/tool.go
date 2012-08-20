@@ -25,6 +25,8 @@ const (
 	status_fatal_error = 2
 )
 
+var statFunction func (string) (os.FileInfo, error)
+
 var needleString *string = flag.String("t", "", "text to look for within input(s)")
 var findAll *bool = flag.Bool("a", false, "display all matching offsets")
 var recursive *bool = flag.Bool("r", false, "recursively descend directories")
@@ -32,6 +34,7 @@ var displayCount *bool = flag.Bool("c", false, "display count of matches")
 var quiet *bool = flag.Bool("q", false, "quiet; exit immediatly with status 0 if any matches found")
 var processStdin *bool = flag.Bool("stdin", false, "process stdin as one of the inputs")
 var swapOutput *bool = flag.Bool("swap", false, "output in format for swap tool")
+var followSymbolicLinks *bool = flag.Bool("L", false, "follow symbolic links")
 
 var needleBytes ba.ByteArray
 var needle *substr.Needle
@@ -54,7 +57,7 @@ func processReader(path string, in io.Reader, in_size int64) {
 					myerr.MyError("    error: %s", result.Error)
 					gotError = true
 				} else {
-					fmt.Printf("%s %d", path, result.Offset)
+					fmt.Printf("\"%s\" %d", path, result.Offset)
 					found = true
 				}
 			} else {
@@ -103,8 +106,13 @@ func processInputs(entry, accumulatedPath string) {
 	var err error
 	var info os.FileInfo
 
-	if info, err = os.Stat(entry); err != nil {
+	if info, err = statFunction(entry); err != nil {
 		myerr.MyError("error: %s", err)
+		return
+	}
+	
+	// skip over non-regular files and non-directories
+	if 0 != info.Mode() & (os.ModeSymlink | os.ModeNamedPipe | os.ModeSocket | os.ModeDevice) {
 		return
 	}
 
@@ -116,15 +124,11 @@ func processInputs(entry, accumulatedPath string) {
 
 		var thisDir string
 		if thisDir, err = os.Getwd(); err != nil {
-			panic(err)
+			myerr.MyPanic(err)
 		}
-		if err = os.Chdir(entry); err != nil {
-			panic(err)
-		}
+		myerr.MyPanic(os.Chdir(entry))
 		defer func() {
-			if err := os.Chdir(thisDir); err != nil {
-				panic(err)
-			}
+			myerr.MyPanic(os.Chdir(thisDir))
 		}()
 
 		var f *os.File
@@ -134,12 +138,11 @@ func processInputs(entry, accumulatedPath string) {
 		}
 		var entries_info []os.FileInfo
 		if entries_info, err = f.Readdir(-1); err != nil {
+			myerr.MyPanic(f.Close())
 			myerr.MyError("error: could not read directory %s; %s", accumulatedPath, err)
 			return
 		}
-		if err = f.Close(); err != nil {
-			panic(err)
-		}
+		myerr.MyPanic(f.Close())
 
 		for _, entry := range entries_info {
 			newAccumulatedPath := fmt.Sprintf("%s%c%s", accumulatedPath, os.PathSeparator, entry.Name())
@@ -199,6 +202,12 @@ func main() {
 		myerr.MyFatal(status_fatal_error, "error: specified neither -t nor -b parameter")
 	} else {
 		needle = substr.NewNeedleBytes(needleBytes)
+	}
+	
+	if *followSymbolicLinks {
+		statFunction = os.Stat
+	} else {
+		statFunction = os.Lstat
 	}
 
 	if *quiet {
