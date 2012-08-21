@@ -1,8 +1,15 @@
+/*
+This file implements a command-line tool to alter files. It can be used in
+conjunction with the sift command-line tool.
+
+Copyright © 2012 by J. E. Ivancich.
+This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 Unported License.
+See: http://creativecommons.org/licenses/by-sa/3.0/
+*/
 package main
 
 import (
 	ba "bytearray"
-	// "bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +21,8 @@ import (
 )
 
 const status_fatal_error = 1
+
+//// TYPE uint64Slice ////
 
 type uint64Slice []uint64
 
@@ -33,12 +42,16 @@ func (d uint64Slice) Less(i, j int) bool {
 	return d[i] < d[j]
 }
 
+//// GLOBAL VARIABLES ////
+
 var fromString *string = flag.String("from", "", "text to replace; used as insurance")
 var toString *string = flag.String("to", "", "replacement text")
 var quiet *bool = flag.Bool("q", false, "quiet")
 var processStdin *bool = flag.Bool("stdin", false, "process stdin as one of the inputs")
 
 var fromBytes, toBytes, buffer ba.ByteArray
+
+//// FUNCTIONS ////
 
 func main() {
 	defer myerr.MyDefer()
@@ -167,6 +180,10 @@ func main() {
 	complete = true
 }
 
+// Creates (and opens) a new file using template (containing path and
+// beginning of file name) and suffix (containing a new suffix to which a
+// number is added). Returns the files name, a pointer to the open file,
+// and any error.
 func makeTempFile(template, suffix string) (fname string, file *os.File, err error) {
 	template2 := template + "." + suffix
 	for i := 0; i <= 100; i++ {
@@ -184,6 +201,7 @@ func makeTempFile(template, suffix string) (fname string, file *os.File, err err
 	return
 }
 
+// Returns true if the two byte slices contain the exact same bytes, false otherwise.
 func sameBytes(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
